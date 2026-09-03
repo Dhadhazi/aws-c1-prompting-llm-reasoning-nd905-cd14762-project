@@ -1,7 +1,24 @@
 #!/usr/bin/env python3
-"""Create the AgentCore Gateway and register the create_bug_report Lambda as a tool.
+"""Create the AgentCore Gateway that exposes create_bug_report as a tool.
 
-Usage: python setup_gateway.py
+Run this ONCE, after deploying cloudformation-tool.yaml:
+
+    python setup_gateway.py
+
+What it does:
+  1. Reads the tool stack's outputs (Lambda ARN, gateway role ARN,
+     harness execution role ARN) — no copy-pasting required.
+  2. Creates an AgentCore Gateway (MCP protocol, AWS_IAM auth).
+  3. Registers the Lambda as a gateway target with one tool:
+     create_bug_report(description, stepsToReproduce, environment).
+  4. Saves everything the later scripts need to agentcore_config.json.
+
+The model will see the tool as "<targetName>___<toolName>", i.e.
+"bugreports___create_bug_report".
+
+IMPORTANT: gateway TARGET names may only contain letters, digits, and
+underscores. A dash in the target name breaks Nova tool calling with
+"Model produced invalid sequence as part of ToolUse".
 """
 
 import argparse
@@ -13,6 +30,8 @@ import boto3
 
 REGION = "us-east-1"
 
+# JSON Schema the model sees for the tool. All three fields are required:
+# the harness should collect them from the customer BEFORE filing a ticket.
 TOOL_SCHEMA = {
     "name": "create_bug_report",
     "description": (
@@ -43,16 +62,19 @@ TOOL_SCHEMA = {
 
 
 def stack_outputs(stack_name):
+    """Return the CloudFormation stack outputs as a {key: value} dict."""
     cfn = boto3.client("cloudformation", region_name=REGION)
     stacks = cfn.describe_stacks(StackName=stack_name)["Stacks"]
     return {o["OutputKey"]: o["OutputValue"] for o in stacks[0].get("Outputs", [])}
 
 
 def create_with_retry(fn, what, attempts=3, delay=10, **kwargs):
+    """Freshly created IAM roles can take a few seconds to propagate.
+    Retry the create call a couple of times before giving up."""
     for attempt in range(1, attempts + 1):
         try:
             return fn(**kwargs)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - show the real error to students
             if attempt == attempts:
                 raise
             print(f"  {what} failed ({exc}); retrying in {delay}s "
@@ -100,6 +122,7 @@ def main():
     print(f"  gateway id:  {gateway_id}")
     print(f"  gateway arn: {gateway_arn}")
 
+    # Wait until the gateway leaves its CREATING state.
     for _ in range(30):
         status = acc.get_gateway(gatewayIdentifier=gateway_id).get("status", "READY")
         if status not in ("CREATING", "UPDATING"):

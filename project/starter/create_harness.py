@@ -1,7 +1,23 @@
 #!/usr/bin/env python3
-"""Create or update the AgentCore harness from system_prompt.txt.
+"""Create (or update) the AgentCore managed harness that runs your chatbot.
 
-Usage: python create_harness.py
+    python create_harness.py
+
+What it does:
+  1. Reads your system prompt from system_prompt.txt. If the file contains
+     the placeholder {{FAQ}}, it is replaced with the contents of
+     online_shop_faq.md — so you don't have to paste the FAQ by hand.
+  2. Creates the harness with the model pinned to Amazon Nova Pro and your
+     prompt as the system prompt. If a harness with the same name already
+     exists, it is UPDATED instead — so iterating on your prompt is just:
+     edit system_prompt.txt, re-run this script.
+  3. Waits until the harness is READY (first creation takes ~2-3 minutes)
+     and records the harness ARN in agentcore_config.json.
+
+Note on the model: this course pins `us.amazon.nova-pro-v1:0` explicitly.
+Do not rely on the harness default model — it requires an AWS Marketplace
+subscription that lab accounts cannot complete. For reliable Nova tool
+calling we also use greedy decoding (temperature 0, topK 1).
 """
 
 import argparse
@@ -14,6 +30,8 @@ import boto3
 
 FAQ_PLACEHOLDER = "{{FAQ}}"
 
+# Greedy decoding (temperature 0 + topK 1) is AWS's recommendation for
+# reliable tool calling with Nova models.
 def model_config(model_id):
     return {
         "bedrockModelConfig": {
@@ -37,6 +55,7 @@ def load_prompt(prompt_path, faq_path):
 
 
 def find_harness(acc, name):
+    """Return the existing harness with this name, or None."""
     token = None
     while True:
         kwargs = {"nextToken": token} if token else {}
@@ -50,9 +69,11 @@ def find_harness(acc, name):
 
 
 def wait_ready(acc, harness_id, timeout=360):
+    """Poll until the harness is READY (or fails)."""
     deadline = time.time() + timeout
     status = "UNKNOWN"
     while time.time() < deadline:
+        # get_harness nests everything under a top-level "harness" key.
         status = acc.get_harness(harnessId=harness_id)["harness"]["status"]
         if status == "READY":
             return status
@@ -92,6 +113,9 @@ def main():
     if existing:
         harness_id = existing.get("harnessId")
         print(f"Harness '{args.name}' already exists — updating its prompt/model...")
+        # update_harness returns ConflictException while the harness is in a
+        # transitional state (e.g. a previous run is still finishing) — wait
+        # for it to settle first.
         if existing.get("status") in ("CREATING", "UPDATING"):
             print(f"  harness is still {existing['status']} — waiting for it "
                   "to settle before updating...")
@@ -104,6 +128,8 @@ def main():
         )
     else:
         print(f"Creating harness '{args.name}' (takes ~2-3 minutes)...")
+        # A freshly created execution role can take a few seconds to
+        # propagate through IAM — retry a couple of times if needed.
         last_exc = None
         for attempt in range(3):
             try:
@@ -114,12 +140,13 @@ def main():
                     systemPrompt=[{"text": prompt}],
                 )
                 break
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 print(f"  create_harness failed ({exc}); retrying in 10s...")
                 time.sleep(10)
         else:
             raise last_exc
+        # create_harness (like get_harness) nests the details under "harness".
         harness_id = harness["harness"]["harnessId"]
 
     status = wait_ready(acc, harness_id)

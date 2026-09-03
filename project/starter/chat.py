@@ -1,7 +1,19 @@
 #!/usr/bin/env python3
-"""Chat with your chatbot in the terminal. Each run is one conversation.
+"""Chat with your support chatbot from the terminal.
 
-Usage: python chat.py
+    python chat.py
+
+Every run starts ONE conversation (one `runtimeSessionId`). The harness is
+stateful: as long as you reuse the same session id, it remembers the whole
+conversation — that is what lets it collect bug details over several turns.
+Start the script again to get a fresh conversation.
+
+The script attaches your AgentCore Gateway to each invoke, so the model can
+call the create_bug_report tool. When it does, you'll see a line like:
+
+    [tool call] bugreports___create_bug_report
+
+Type your message and press Enter. Type 'quit' (or Ctrl-C) to exit.
 """
 
 import argparse
@@ -16,6 +28,7 @@ from botocore.eventstream import EventStream
 
 
 def event_stream(response):
+    """Locate the streaming part of the invoke_harness response."""
     for value in response.values():
         if isinstance(value, EventStream):
             return value
@@ -23,10 +36,18 @@ def event_stream(response):
 
 
 def invoke(rt, config, session_id, user_text, verbose=False):
+    """Send one user message; print the reply as it streams in.
+
+    Returns the assistant's final text. Tool calls and tool results are
+    handled server-side by the harness — we only watch them go by.
+    """
     response = rt.invoke_harness(
         harnessArn=config["harness_arn"],
         runtimeSessionId=session_id,
+        # Pin the model on every invoke as well (belt and suspenders —
+        # create_harness.py already pinned it on the harness).
         model={"bedrockModelConfig": {"modelId": config.get("model_id", "us.amazon.nova-pro-v1:0")}},
+        # Attach the gateway so the model can use create_bug_report.
         tools=[{
             "type": "agentcore_gateway",
             "name": "support_gateway",
@@ -35,8 +56,8 @@ def invoke(rt, config, session_id, user_text, verbose=False):
         messages=[{"role": "user", "content": [{"text": user_text}]}],
     )
 
-    texts = []
-    buffer = []
+    texts = []      # completed assistant messages
+    buffer = []     # text of the message currently streaming
     for event in event_stream(response):
         if verbose:
             print(f"\n[event] {json.dumps(event, default=str)}", file=sys.stderr)
@@ -71,11 +92,13 @@ def main():
     if "harness_arn" not in config:
         sys.exit("No harness in config yet — run create_harness.py first.")
 
+    # Session ids must be at least 33 characters — a UUID plus a suffix.
     session_id = f"{uuid.uuid4()}-support-chat"
 
     rt = boto3.client(
         "bedrock-agentcore",
         region_name=config["region"],
+        # Tool-using turns can take a while; don't let boto3 time out.
         config=Config(read_timeout=300, retries={"max_attempts": 1}),
     )
 
