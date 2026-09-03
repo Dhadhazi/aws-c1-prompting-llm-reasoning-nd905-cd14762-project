@@ -1,18 +1,7 @@
 #!/usr/bin/env python3
-"""Delete the AgentCore resources created for this project.
+"""Delete the harness, gateway target and gateway created for this project.
 
-    python cleanup_agentcore.py
-
-Deletes, in order: the harness, the gateway target, and the gateway —
-all read from agentcore_config.json.
-
-This does NOT delete the CloudFormation stacks. After running this script,
-finish cleaning up with (empty the evaluation bucket BEFORE deleting the
-testing stack — CloudFormation cannot delete a non-empty bucket):
-
-    aws cloudformation delete-stack --stack-name bug-report-tool-stack --region us-east-1
-    aws s3 rm s3://<EvalDatasetBucketName> --recursive
-    aws cloudformation delete-stack --stack-name bug-report-testing-stack --region us-east-1
+Usage: python cleanup_agentcore.py
 """
 
 import argparse
@@ -43,13 +32,11 @@ def main():
 
     acc = boto3.client("bedrock-agentcore-control", region_name=config["region"])
 
-    # 1. Harness
     harness_id = config.get("harness_id")
     if harness_id:
         print(f"Deleting harness {config.get('harness_name', harness_id)}...")
         try:
             acc.delete_harness(harnessId=harness_id)
-            # Wait for the deletion to finish before touching the gateway.
             for _ in range(24):
                 try:
                     acc.get_harness(harnessId=harness_id)
@@ -65,7 +52,6 @@ def main():
             else:
                 raise
 
-    # 2. Gateway target, then the gateway itself
     gateway_id = config.get("gateway_id")
     if gateway_id:
         target_id = config.get("gateway_target_id")

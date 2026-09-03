@@ -32,9 +32,6 @@ You will create the harness, iterate on its system prompt, and then test it in v
 
 | File | Description |
 |------|-------------|
-| `docs/tools-setup.md` | Step-by-step guide for creating the bug report tool and gateway. |
-| `docs/testing.md` | Step-by-step guide for automated testing and running Bedrock Evaluations. |
-| `solution/` | Reference solution with the complete system prompt and test suite. |
 | `cloudformation-tool.yaml` | Creates the DynamoDB table, the `create_bug_report` Lambda, and the IAM roles for the gateway and the harness. |
 | `cloudformation-testing.yaml` | Creates the resources used to test your final application (S3 bucket + evaluation role). |
 | `create_bug_report.py` | The Lambda function code (also embedded in the tool template) that stores bug reports in DynamoDB. |

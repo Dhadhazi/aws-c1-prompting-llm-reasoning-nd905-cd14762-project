@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
-"""Run your harness against a test suite and emit a Bedrock Evaluations
-JSONL dataset (LLM-as-a-judge, bring-your-own-inference).
+"""Run your test suite against the harness and write a Bedrock Evaluations JSONL dataset.
 
-    python generate-eval-dataset.py --tests-json harness-tests.json
-
-Each test case is sent to the harness in a FRESH session (a new
-runtimeSessionId), so test cases cannot influence each other. The final
-assistant reply is written to the output JSONL in the format Bedrock
-Evaluations expects:
-
-    {"prompt": ..., "referenceResponse": ...,
-     "modelResponses": [{"response": ..., "modelIdentifier": ...}]}
+Usage: python generate-eval-dataset.py --tests-json harness-tests.json
 """
 
 import argparse
@@ -26,7 +17,6 @@ from botocore.eventstream import EventStream
 
 
 def _event_stream(response):
-    """Locate the streaming part of the invoke_harness response."""
     for value in response.values():
         if isinstance(value, EventStream):
             return value
@@ -40,13 +30,6 @@ def invoke_harness_once(
     model_id: str,
     prompt: str,
 ) -> Dict[str, Any]:
-    """Invoke the harness with a single user message in a fresh session and
-    return {"final_output_text": ...}.
-
-    The harness runs the full agent loop server-side (including any tool
-    calls through the gateway); we collect the streamed text of its final
-    reply.
-    """
     tools = []
     if gateway_arn:
         tools = [{
@@ -57,17 +40,14 @@ def invoke_harness_once(
 
     response = rt.invoke_harness(
         harnessArn=harness_arn,
-        # Session ids must be >= 33 characters; a fresh one per test case
-        # keeps every test independent.
         runtimeSessionId=f"{uuid.uuid4()}-evalcase",
-        # Pin the model explicitly — never rely on the harness default.
         model={"bedrockModelConfig": {"modelId": model_id}},
         tools=tools,
         messages=[{"role": "user", "content": [{"text": prompt}]}],
     )
 
-    texts = []      # completed assistant messages
-    buffer = []     # message currently streaming
+    texts = []
+    buffer = []
     for event in _event_stream(response):
         if "contentBlockDelta" in event:
             delta = event["contentBlockDelta"].get("delta", {})
@@ -107,7 +87,6 @@ def main():
                    help="AWS region (default: from config file, else us-east-1).")
     args = p.parse_args()
 
-    # ARNs come from agentcore_config.json unless overridden on the CLI.
     config = {}
     if Path(args.config).exists():
         config = json.loads(Path(args.config).read_text(encoding="utf-8"))
@@ -147,12 +126,9 @@ def main():
                 response_text = result["final_output_text"]
                 n_ok += 1
             except Exception as e:
-                # If the harness errors, still emit a record so the eval
-                # run captures failures.
                 print(e, file=sys.stderr)
                 response_text = f"[HARNESS_ERROR] {type(e).__name__}: {e}"
 
-            # Bedrock Evaluations LLM-as-a-judge (BYOI) input JSONL record
             record = {
                 "prompt": prompt,
                 "referenceResponse": reference,
@@ -162,9 +138,6 @@ def main():
                         "modelIdentifier": args.model_identifier,
                     }
                 ],
-                # Optional: keep the test id as metadata by embedding into
-                # the prompt or category, since the public schema doesn't
-                # show a dedicated id field.
             }
 
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
